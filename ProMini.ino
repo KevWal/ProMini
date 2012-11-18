@@ -187,7 +187,8 @@ void loop() {
   }
   lastloopmillis = millis();
   Debugger.println("");
-  
+
+//  $$Bob Temperature code  
 //  Debugger.println(F("loop() Request Temperature Data"));
 //  sensors.requestTemperatures();
 //  delay(750);
@@ -197,6 +198,12 @@ void loop() {
   // I dont do any manipulation of temp, but follow the same routine as with all the data incase I need to.
 //  s.internal_t = g.internal_t;
 //  s.external_t = g.external_t;
+
+  Debugger.println(F("loop() Request Temp from RFM22b module"));
+  // tsrange = 0x00 = –64 C .. 64 C (full operating range), with 0.5 C resolution (1 LSB in the 8-bit ADC)
+  // tvoffs = 0 = zero offset
+  g.internal_t = temperatureRead(0x00,0) / 2;  //get temp from RFM22b, 0.5 deg C per 
+  s.internal_t = g.internal_t - (64 + 10);  // Sensor has at least a 10 degree positive offset.
   
   Debugger.println(F("loop() Request Navigation Data from GPS module"));
   Serial.println("$PUBX,00*33");  
@@ -237,17 +244,14 @@ void loop() {
   // $$CALLSIGN,sentence_id,time,latitude,longitude,altitude,optional speed,optional bearing,optional internal temperature,*CHECKSUM\r\n
   //
   // our sentance will be
-  // %%PROM, id, time, lat, lon, alt, sats, *CHECKSUM\r\n
+  // %%PROM, id, time, lat, lon, alt, sats, vinmv, rfm_temp*CHECKSUM
   //
   // changed to using dtostrf*(x, 8, 6, y)
   //
-  // No Time             $$PROM,7,00:01:33,0.000000,0.000000,0,0,4135,26,25*3701
-  // Time only           $$PROM,9,16:43:30,0.000000,0.000000,0,0,4135,26,25*2DA3
-  // First sign of data  $$PROM,20,16:46:12,35.539410,6.760060,7185,0,4135,26,24*6E5B 
-  // First fix           $$PROM,23,16:46:57,52.322529,0.706500,137,4,4135,26,24*33B6  // should have a - in
-  // Better fix          $$PROM,37,16:50:27,52.322632,0.706100,140,5,4148,26,24*5C34  // should have a - in
-  // 7 sats              $$PROM,142,19:04:08,52.322762,-0.706140,125,7,4090,27,28*DA13
-
+  // $$PROM,1,235958,0.000000,0.000000,0,0,1464,41*7CDA //vinmv disconnected at this point
+  // $$PROM,2,000010,0.000000,0.000000,0,0,25,42*63B0 //vinmv disconnected at this point
+  // $$PROM,762,221354,52.322750,-0.706220,132,4,277,16*2256 //vinmv disconnected at this point
+  //
   // http://ukhas.org.uk/communication:protocol
     
   Debugger.println(F("loop() Increment sentance id, a unique id for each sentance"));
@@ -313,13 +317,38 @@ void loop() {
 //
 //**********************************************************************************
 
+// https://github.com/jamescoxon/PicoAtlas/blob/master/Pico7/Pico7.ino
+//Taken from RFM22 library + navrac
+uint8_t adcRead(uint8_t adcsel)
+{
+    uint8_t configuration = adcsel;
+    radio1.write(0x0f, configuration | 0x80);
+    radio1.write(0x10, 0x00);
+
+    // Conversion time is nominally 305usec
+    // Wait for the DONE bit
+    while (!(radio1.read(0x0f) & 0x80))
+	;
+    // Return the value  
+    return radio1.read(0x11);
+}
+
+uint8_t temperatureRead(uint8_t tsrange, uint8_t tvoffs)
+{
+    radio1.write(0x12, tsrange | 0x20);
+    radio1.write(0x13, tvoffs);
+    return adcRead(0x00 | 0x00); 
+}
+
+
+
 void make_string()
 {
   char checksum[10];
   
   // Time must be padded
   //snprintf(sentance, sizeof(sentance), "$$BOB,%d,%02d:%02d:%02d,%s,%s,%ld,%d,%d,%d,%d", s.id, s.hour, s.minute, s.second, s.latbuf, s.lonbuf, s.alt, s.sats, s.vinmv, s.internal_t, s.external_t);
-  snprintf(sentance, sizeof(sentance), "$$PROM,%d,%02d%02d%02d,%s,%s,%ld,%d,%d", s.id, s.hour, s.minute, s.second, s.latbuf, s.lonbuf, s.alt, s.sats, s.vinmv);
+  snprintf(sentance, sizeof(sentance), "$$PROM,%d,%02d%02d%02d,%s,%s,%ld,%d,%d,%d", s.id, s.hour, s.minute, s.second, s.latbuf, s.lonbuf, s.alt, s.sats, s.vinmv, s.internal_t);
 
   //snprintf(checksum, sizeof(checksum), "*%02X\n", xor_checksum(sentance));
   snprintf(checksum, sizeof(checksum), "*%04X\n", gps_CRC16_checksum(sentance));
@@ -410,7 +439,7 @@ void rtty_txbyte (char c)
 */
 
 // RFM22b txbit
-void rtty_txbit (int bit)
+/*void rtty_txbit (int bit)
 {
 		if (bit)
 		{
@@ -423,9 +452,27 @@ void rtty_txbit (int bit)
                   radio1.setFrequency(434.2010);
 		}
                 delayMicroseconds(19500); // 10000 = 100 BAUD 20150
+                
  
 }
- 
+*/
+
+// RFM22b new txbit, using frequency shift register, gives a much tighter transmission. 
+// Frequency deviation of a One or a Zero goes from about 68 to 37.
+// Detailed here: http://ava.upuaut.net/?p=408 Thanks to Dave Akerman suggested (as recommended by Navrac)
+void rtty_txbit (int bit)
+{
+  if (bit)
+  {
+    radio1.write(0x73,0x03); // High
+  }
+  else
+  {
+    radio1.write(0x73,0x00); // Low
+  }
+  delayMicroseconds(19500); // 10000 = 100 BAUD 20150
+}
+
  
 uint16_t gps_CRC16_checksum (char *string)
 {
@@ -614,6 +661,6 @@ void setupRadio(){
   radio1.write(0x0b,0x12);
   radio1.write(0x0c,0x15);
  
-  radio1.setFrequency(434.2010);
+  radio1.setFrequency(434.2010); //434201000
 }
 
