@@ -123,6 +123,8 @@ void setup() {
   
   Debugger.println(F("setup() Finally turn off GGA as we are going to poll for PUBX instead"));
   Serial.println("$PUBX,40,GGA,0,0,0,0*5A");
+  
+  Serial.flush(); // Flush any data the GPS might have sent so far.
    
   Debugger.println(F("setup() Set Flight Mode using UBX code, as we hope to be going over 12km high"));
   uint8_t setNav[] = {0xB5, 0x62, 0x06, 0x24, 0x24, 0x00, 0xFF, 0xFF, 0x06, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x05, 0x00, 0xFA, 0x00, 0xFA, 0x00, 0x64, 0x00, 0x2C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0xDC};
@@ -178,6 +180,8 @@ void loop() {
   int wait = 0; //Break out of various loops if we get stuck
   
   Debugger.println(F("loop() Start Main Loop"));
+  setupRadio();  //Setup the radio every time due to issuues with it going quiet on me?
+  radio1.write(0x07, 0x08);  // Start TX'ing, incase we have stopped for any reason
   
   Debugger.println(F("loop() Dont go around this loop more than once every 3 seconds"));
   Debugger.print(F("loop() "));
@@ -298,13 +302,14 @@ void loop() {
   
   Debugger.print(F("loop() Battery Voltage is: "));
   s.vin = analogRead(VINPIN);
-  s.vinmv = s.vin / 0.155;  //Floating point arithmetic on an integer, seems to work?
+  s.vinmv = s.vin * 3.223 ;  //Floating point arithmetic on an integer, seems to work?
   Debugger.println(s.vinmv, DEC);
   
   Debugger.println(F("loop() Build the string to send"));
   make_string();
 
   Debugger.println(F("loop() Transmit the data"));
+  rtty_txstring("$$$$$");  //Transmit these outside of the checksumed string
   rtty_txstring(sentance);
 
 } //end of Loop()
@@ -366,15 +371,15 @@ void make_string()
 
 void rtty_txstring (char * string)
 {
-  Debugger.println(F("rtty_txstring()"));
-  Debugger.println(F("rtty_txstring() Simple function to sent a char at a time to rtty_txbyte")); 
-  Debugger.println(F("rtty_txstring() NB Each char is one byte (8 Bits)"));
+  //Debugger.println(F("rtty_txstring()"));
+  //Debugger.println(F("rtty_txstring() Simple function to sent a char at a time to rtty_txbyte")); 
+  //Debugger.println(F("rtty_txstring() NB Each char is one byte (8 Bits)"));
  
   char c;
  
   c = *string++;
  
-  Debugger.println(F("rtty_txstring() Send: "));
+  //Debugger.println(F("rtty_txstring() Send: "));
   while ( c != '\0')
   {
 //    Debugger.print(c);
@@ -460,7 +465,7 @@ void rtty_txbyte (char c)
 // RFM22b new txbit, using frequency shift register, gives a much tighter transmission. 
 // Frequency deviation of a One or a Zero goes from about 68 to 37.
 // Detailed here: http://ava.upuaut.net/?p=408 Thanks to Dave Akerman suggested (as recommended by Navrac)
-void rtty_txbit (int bit)
+/*void rtty_txbit (int bit)
 {
   if (bit)
   {
@@ -472,7 +477,22 @@ void rtty_txbit (int bit)
   }
   delayMicroseconds(19500); // 10000 = 100 BAUD 20150
 }
+*/
 
+void rtty_txbit (int bit)
+{
+  if (bit)
+  {
+    radio1.write(0x74,0x00); // High  - Need to set high as zero and low as less than zero due to resetting radio every time around loop.x
+    radio1.write(0x73,0x00); // High
+  }
+  else
+  {
+    radio1.write(0x74,0xFF); // 10 bit Low 2's compliment  http://www.mutter.in/binary-twos-complement-calculator
+    radio1.write(0x73,0xFD); // 10 bit Low 2's compliment  Section 3.5.5 http://www.sparkfun.com/datasheets/Wireless/General/RFM22B.pdf
+  }
+  delayMicroseconds(19500); // 10000 = 100 BAUD 20150
+}
  
 uint16_t gps_CRC16_checksum (char *string)
 {
@@ -661,6 +681,6 @@ void setupRadio(){
   radio1.write(0x0b,0x12);
   radio1.write(0x0c,0x15);
  
-  radio1.setFrequency(434.2010); //434201000
+  radio1.setFrequency(434.2015); //434201000
 }
 
